@@ -12,8 +12,11 @@
 #define PADDING 20
 
 int selection = 0;
+int offset = 0;
+int lines = 0;
+int entries = 0;
 
-void draw_music_dir(SDL_Renderer *renderer, SDL_Color textColor, TTF_Font *font) {
+void init_music_dir(int textHeight) {
 
   DIR *dir;
   struct dirent *entry;
@@ -24,38 +27,70 @@ void draw_music_dir(SDL_Renderer *renderer, SDL_Color textColor, TTF_Font *font)
     return;
   }
 
-  //  printf("directory contents:\n");
+  // find out how many lines will fit
+  int y = PADDING * 2 + textHeight;
+  int h = SCREEN_H - y - PADDING;
+  lines = h / textHeight;
 
-  int i=0;
+  entries = 0;
+  
   while ((entry = readdir(dir)) != NULL) {
-    //    printf("%s\n", entry->d_name);
-    SDL_Surface *textSurface = TTF_RenderText_Blended(font, entry->d_name, textColor);
-    if (!textSurface) {
-      printf("text surface error: %s\n", TTF_GetError());
-      return;
-    }
-    SDL_Texture *textTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
-    int textWidth = textSurface->w;
-    int textHeight = textSurface->h;
-    SDL_FreeSurface(textSurface);
-    int ry = PADDING * 2 + textHeight * (1 + i);
-    SDL_Rect renderQuad = {PADDING, ry, textWidth, textHeight};
-
-    if (i == selection) {
-      SDL_SetRenderDrawColor(renderer, 0,0,0,255);
-      SDL_RenderFillRect(renderer, &renderQuad);
-    }
-
-    SDL_RenderCopy(renderer, textTexture, NULL, &renderQuad);
-
-    SDL_DestroyTexture(textTexture);
-    
-    if (ry + textHeight + PADDING >= SCREEN_H) break;
-    i++;
+    entries++;
   }
 
   closedir(dir);
+}
+
+void draw_music_dir(SDL_Renderer *renderer, SDL_Color textColor, TTF_Font *font, int textHeight) {
+
+  DIR *dir;
+  struct dirent *entry;
+
+  dir = opendir(MUSIC_DIR);
+  if (dir == NULL) {
+    perror("unable to open directory");
+    return;
+  }
+
+  // find out how many lines will fit
+  int y = PADDING * 2 + textHeight;
+  int h = SCREEN_H - y - PADDING;
+  //  int lines = h / textHeight;
+
+  int i=0;
   
+  while ((entry = readdir(dir)) != NULL) {
+
+    //    printf("processing entry %d: %s\n", i, entry->d_name);
+
+    if (i >= offset && i < offset + lines) {
+
+      //      printf("entry is visible, rendering\n");
+    
+      SDL_Surface *textSurface = TTF_RenderText_Blended(font, entry->d_name, textColor);
+      if (!textSurface) {
+	printf("text surface error: %s\n", TTF_GetError());
+	return;
+      }
+      SDL_Texture *textTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
+      int textWidth = textSurface->w;
+      SDL_FreeSurface(textSurface);
+      int ry = y + textHeight * (i - offset);
+      SDL_Rect renderQuad = {PADDING, ry, textWidth, textHeight};
+
+      if (i == selection) {
+	SDL_SetRenderDrawColor(renderer, 0,0,0,255);
+	SDL_RenderFillRect(renderer, &renderQuad);
+      }
+
+      SDL_RenderCopy(renderer, textTexture, NULL, &renderQuad);
+
+      SDL_DestroyTexture(textTexture);
+    }
+    i++;
+  }
+
+  closedir(dir);  
 }
 
 // print the contents of the music directory
@@ -124,7 +159,7 @@ int main(int argc, char* argv[]) {
   SDL_FreeSurface(textSurface);
   SDL_Rect renderQuad = {PADDING, PADDING, textWidth, textHeight};
 
-  //  print_music_dir();
+  init_music_dir(textHeight);
   
   int running = 1;
   SDL_Event event;
@@ -139,8 +174,16 @@ int main(int argc, char* argv[]) {
       } else if (event.type == SDL_KEYDOWN) {
 	switch (event.key.keysym.sym) {
 	case SDLK_DOWN:
-	  printf("down arrow pressed\n");
 	  selection++;
+	  printf("down arrow pressed - incrementing selection to %d\n", selection);
+	  if (selection >= entries) {
+	    selection = entries - 1;
+	  }
+	  if (selection - offset >= lines) {
+	    offset = selection - lines + 1;
+	    if (offset < 0) offset = 0;
+	    printf("selection - offset >= lines(%d), new offset = %d\n", lines, offset);
+	  }
 	  update = 1;
 	  break;
 	case SDLK_UP:
@@ -149,6 +192,7 @@ int main(int argc, char* argv[]) {
 	  if (selection < 0) {
 	    selection = 0;
 	  }
+	  if (selection < offset) offset = selection;
 	  update = 1;
 	  break;
 	}
@@ -162,7 +206,7 @@ int main(int argc, char* argv[]) {
 
       SDL_RenderCopy(renderer, textTexture, NULL, &renderQuad);
 
-      draw_music_dir(renderer, textColor, font);
+      draw_music_dir(renderer, textColor, font, textHeight);
 
       SDL_RenderPresent(renderer);
 
