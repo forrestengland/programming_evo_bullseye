@@ -39,12 +39,11 @@ int_client_t app;
 
 
 int jack_process_cb(jack_nframes_t nframes, void *arg) {
-    int_client_t *a = (int_client_t *)arg;
 
-    float *out_left =
-        jack_port_get_buffer(a->ports[0], nframes);
-    float *out_right =
-        jack_port_get_buffer(a->ports[1], nframes);
+  int_client_t *a = (int_client_t *)arg;
+
+    float *out_left = jack_port_get_buffer(a->ports[0], nframes);
+    float *out_right = jack_port_get_buffer(a->ports[1], nframes);
 
     memset(out_left, 0, nframes * sizeof(float));
     memset(out_right, 0, nframes * sizeof(float));
@@ -61,11 +60,9 @@ int jack_process_cb(jack_nframes_t nframes, void *arg) {
     size_t bytes_per_frame = channels * sizeof(float);
     size_t requested_bytes = (size_t)nframes * bytes_per_frame;
 
-    size_t available =
-        jack_ringbuffer_read_space(a->ringbuffer);
+    size_t available = jack_ringbuffer_read_space(a->ringbuffer);
 
-    size_t bytes_to_read =
-        available < requested_bytes ? available : requested_bytes;
+    size_t bytes_to_read = available < requested_bytes ? available : requested_bytes;
 
     bytes_to_read -= bytes_to_read % bytes_per_frame;
 
@@ -95,49 +92,50 @@ int jack_process_cb(jack_nframes_t nframes, void *arg) {
 }
 
 void *disk_reader_thread(void *arg) {
-    int_client_t *a = (int_client_t *)arg;
 
-    float disk_buffer[1024 * 2];
+  int_client_t *a = (int_client_t *)arg;
 
-    while (!quit) {
-        if (!a->playing || !a->sndfile) {
-            usleep(10000);
-            continue;
-        }
+  float disk_buffer[1024 * 2];
 
-        int channels = a->sfinfo.channels;
-
-        if (channels != 1 && channels != 2) {
-            a->playing = 0;
-            continue;
-        }
-
-        size_t bytes_per_frame = channels * sizeof(float);
-        size_t block_bytes = 1024 * bytes_per_frame;
-
-        if (jack_ringbuffer_write_space(a->ringbuffer)
-                >= block_bytes) {
-
-            sf_count_t frames =
-                sf_readf_float(a->sndfile, disk_buffer, 1024);
-
-            if (frames <= 0) {
-                printf("End of file reached\n");
-                a->playing = 0;
-                continue;
-            }
-
-            jack_ringbuffer_write(
-                a->ringbuffer,
-                (char *)disk_buffer,
-                (size_t)frames * bytes_per_frame
-            );
-        } else {
-            usleep(2000);
-        }
+  while (!quit) {
+    if (!a->playing || !a->sndfile) {
+      usleep(10000);
+      continue;
     }
 
-    return NULL;
+    int channels = a->sfinfo.channels;
+
+    if (channels != 1 && channels != 2) {
+      a->playing = 0;
+      continue;
+    }
+
+    size_t bytes_per_frame = channels * sizeof(float);
+    size_t block_bytes = 1024 * bytes_per_frame;
+
+    if (jack_ringbuffer_write_space(a->ringbuffer)
+	>= block_bytes) {
+
+      sf_count_t frames =
+	sf_readf_float(a->sndfile, disk_buffer, 1024);
+
+      if (frames <= 0) {
+	printf("End of file reached\n");
+	a->playing = 0;
+	continue;
+      }
+
+      jack_ringbuffer_write(
+			    a->ringbuffer,
+			    (char *)disk_buffer,
+			    (size_t)frames * bytes_per_frame
+			    );
+    } else {
+      usleep(2000);
+    }
+  }
+
+  return NULL;
 }
 
 void load_music_dir() {
@@ -181,7 +179,6 @@ void cleanup_music_dir() {
 
 void draw_music_dir(SDL_Renderer *renderer, SDL_Color textColor, TTF_Font *font, int textHeight) {
 
-  // find out how many lines will fit
   int y = PADDING * 2 + textHeight;
   int h = SCREEN_H - y - PADDING;
 
@@ -211,46 +208,47 @@ void draw_music_dir(SDL_Renderer *renderer, SDL_Color textColor, TTF_Font *font,
 
 
 void play_selection() {
-    if (selection < 0 || selection >= entries)
-        return;
 
-    char path[1024];
-    snprintf(path, sizeof(path), "%s/%s",
-             MUSIC_DIR, entry_list[selection]);
+  if (selection < 0 || selection >= entries)
+    return;
 
-    SF_INFO info = {0};
-    SNDFILE *new_file = sf_open(path, SFM_READ, &info);
+  char path[1024];
+  snprintf(path, sizeof(path), "%s/%s",
+	   MUSIC_DIR, entry_list[selection]);
 
-    if (!new_file) {
-        fprintf(stderr, "Cannot open %s: %s\n",
-                path, sf_strerror(NULL));
-        return;
-    }
+  SF_INFO info = {0};
+  SNDFILE *new_file = sf_open(path, SFM_READ, &info);
 
-    if (info.channels != 1 && info.channels != 2) {
-        fprintf(stderr, "Unsupported channel count: %d\n",
-                info.channels);
-        sf_close(new_file);
-        return;
-    }
+  if (!new_file) {
+    fprintf(stderr, "Cannot open %s: %s\n",
+	    path, sf_strerror(NULL));
+    return;
+  }
 
-    printf("Loaded: %s\n", path);
-    printf("Sample rate: %d Hz, channels: %d\n",
-           info.samplerate, info.channels);
+  if (info.channels != 1 && info.channels != 2) {
+    fprintf(stderr, "Unsupported channel count: %d\n",
+	    info.channels);
+    sf_close(new_file);
+    return;
+  }
 
-    /*
-     * Note: this assumes the reader thread is not currently
-     * using the previous file. Synchronize file replacement
-     * before allowing track changes during playback.
-     */
-    if (app.sndfile)
-        sf_close(app.sndfile);
+  printf("Loaded: %s\n", path);
+  printf("Sample rate: %d Hz, channels: %d\n",
+	 info.samplerate, info.channels);
 
-    app.sfinfo = info;
-    app.sndfile = new_file;
+  /*
+   * Note: this assumes the reader thread is not currently
+   * using the previous file. Synchronize file replacement
+   * before allowing track changes during playback.
+   */
+  if (app.sndfile)
+    sf_close(app.sndfile);
 
-    jack_ringbuffer_reset(app.ringbuffer);
-    app.playing = 1;
+  app.sfinfo = info;
+  app.sndfile = new_file;
+
+  jack_ringbuffer_reset(app.ringbuffer);
+  app.playing = 1;
 }
 
 int main(int argc, char* argv[]) {
@@ -261,7 +259,6 @@ int main(int argc, char* argv[]) {
   app.client = jack_client_open("wavplayer", JackNullOption, &status);
   if (!app.client) {
     fprintf(stderr, "could not connect to jack\n");
-    //    sf_close(app.sndfile);
     return 1;
   }
 
@@ -349,6 +346,7 @@ int main(int argc, char* argv[]) {
   SDL_FreeSurface(textSurface);
   SDL_Rect renderQuad = {PADDING, PADDING, textWidth, textHeight};
 
+  // load music dir entries
   init_music_dir(textHeight);
   
   int running = 1;
