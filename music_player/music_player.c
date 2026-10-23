@@ -11,6 +11,8 @@
 
 #define PADDING 20
 
+int selection = 0;
+
 void draw_music_dir(SDL_Renderer *renderer, SDL_Color textColor, TTF_Font *font) {
 
   DIR *dir;
@@ -38,6 +40,11 @@ void draw_music_dir(SDL_Renderer *renderer, SDL_Color textColor, TTF_Font *font)
     SDL_FreeSurface(textSurface);
     int ry = PADDING * 2 + textHeight * (1 + i);
     SDL_Rect renderQuad = {PADDING, ry, textWidth, textHeight};
+
+    if (i == selection) {
+      SDL_SetRenderDrawColor(renderer, 0,0,0,255);
+      SDL_RenderFillRect(renderer, &renderQuad);
+    }
 
     SDL_RenderCopy(renderer, textTexture, NULL, &renderQuad);
 
@@ -126,14 +133,31 @@ int main(int argc, char* argv[]) {
   while (running) {
 
     while (SDL_PollEvent(&event)) {
+
       if (event.type == SDL_QUIT) {
 	running = 0;
+      } else if (event.type == SDL_KEYDOWN) {
+	switch (event.key.keysym.sym) {
+	case SDLK_DOWN:
+	  printf("down arrow pressed\n");
+	  selection++;
+	  update = 1;
+	  break;
+	case SDLK_UP:
+	  printf("up arrow pressed\n");
+	  selection--;
+	  if (selection < 0) {
+	    selection = 0;
+	  }
+	  update = 1;
+	  break;
+	}
       }
     }
 
     if (update) {
 
-      SDL_SetRenderDrawColor(renderer,30,30,46,255);
+      SDL_SetRenderDrawColor(renderer,100,100,100,255);
       SDL_RenderClear(renderer);
 
       SDL_RenderCopy(renderer, textTexture, NULL, &renderQuad);
