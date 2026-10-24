@@ -48,6 +48,8 @@ int jack_process_cb(jack_nframes_t nframes, void *arg) {
     memset(out_left, 0, nframes * sizeof(float));
     memset(out_right, 0, nframes * sizeof(float));
 
+    if (!a->playing) return 0;
+
     static float buffer[4096 * 2];
 
     if (nframes > 4096)
@@ -98,6 +100,7 @@ void *disk_reader_thread(void *arg) {
   float disk_buffer[1024 * 2];
 
   while (!quit) {
+
     if (!a->playing || !a->sndfile) {
       usleep(10000);
       continue;
@@ -206,8 +209,18 @@ void draw_music_dir(SDL_Renderer *renderer, SDL_Color textColor, TTF_Font *font,
   }
 }
 
+void toggle_playback() {
+  app.playing = !app.playing;
+  printf("toggling playback to %d\n", app.playing);
+}
 
 void play_selection() {
+
+  // close any previously playing sound file
+  if (app.sndfile) {
+    app.playing = 0;
+    sf_close(app.sndfile);
+  } 
 
   if (selection < 0 || selection >= entries)
     return;
@@ -241,8 +254,8 @@ void play_selection() {
    * using the previous file. Synchronize file replacement
    * before allowing track changes during playback.
    */
-  if (app.sndfile)
-    sf_close(app.sndfile);
+  //  if (app.sndfile)
+  //    sf_close(app.sndfile);
 
   app.sfinfo = info;
   app.sndfile = new_file;
@@ -386,6 +399,9 @@ int main(int argc, char* argv[]) {
 	  break;
 	case SDLK_RETURN:
 	  play_selection();
+	  break;
+	case SDLK_SPACE:
+	  toggle_playback();
 	  break;
 	}
       }
