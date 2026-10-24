@@ -33,7 +33,7 @@ atomic_bool reader_playing = false;
 atomic_bool quit = 0;
 atomic_int audio_channels = 0;
 
-#define MUSIC_DIR "/home/forrest/music"
+#define MUSIC_DIR "/home/forrest/recordings"
 
 #define SCREEN_W 800
 #define SCREEN_H 600
