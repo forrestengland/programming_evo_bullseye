@@ -9,6 +9,9 @@
 #include <jack/jack.h>
 #include <jack/ringbuffer.h>
 #include <sndfile.h>
+#include <stdbool.h>
+#include <strings.h>  // strcasecmp()
+#include <stdatomic.h>
 
 #define MUSIC_DIR "/home/forrest/music"
 
@@ -16,6 +19,8 @@
 #define SCREEN_H 600
 
 #define PADDING 20
+
+int update = 1;
 
 int selection = 0;
 int offset = 0;
@@ -25,6 +30,9 @@ int entries = 0;
 char *entry_list[MAX_ENTRIES];
 
 int quit = 0;
+#define AUTOPLAY 1
+atomic_bool playing_ended = false;
+atomic_bool disk_eof = false;
 
 typedef struct {
   jack_client_t *client;
@@ -68,9 +76,13 @@ int jack_process_cb(jack_nframes_t nframes, void *arg) {
 
     bytes_to_read -= bytes_to_read % bytes_per_frame;
 
-    if (bytes_to_read == 0)
-        return 0;
-
+    if (bytes_to_read == 0) {
+      if (atomic_load(&disk_eof)) {
+        atomic_store(&playing_ended, true);
+      }
+      return 0;
+    }
+    
     jack_ringbuffer_read(
         a->ringbuffer,
         (char *)buffer,
@@ -88,6 +100,12 @@ int jack_process_cb(jack_nframes_t nframes, void *arg) {
             out_left[i] = buffer[i * 2];
             out_right[i] = buffer[i * 2 + 1];
         }
+    }
+
+    // All remaining queued audio has now been consumed.
+    if (atomic_load(&disk_eof) &&
+	bytes_to_read == available) {
+      atomic_store(&playing_ended, true);
     }
 
     return 0;
@@ -123,10 +141,10 @@ void *disk_reader_thread(void *arg) {
 	sf_readf_float(a->sndfile, disk_buffer, 1024);
 
       if (frames <= 0) {
-	printf("End of file reached\n");
-	a->playing = 0;
+	atomic_store(&disk_eof, true);
+	usleep(2000);
 	continue;
-      }
+      }	
 
       jack_ringbuffer_write(
 			    a->ringbuffer,
@@ -214,7 +232,8 @@ void toggle_playback() {
   printf("toggling playback to %d\n", app.playing);
 }
 
-void play_selection() {
+
+bool play_selection() {
 
   // close any previously playing sound file
   if (app.sndfile) {
@@ -223,45 +242,90 @@ void play_selection() {
   } 
 
   if (selection < 0 || selection >= entries)
-    return;
+        return false;
 
-  char path[1024];
-  snprintf(path, sizeof(path), "%s/%s",
-	   MUSIC_DIR, entry_list[selection]);
+    const char *filename = entry_list[selection];
 
-  SF_INFO info = {0};
-  SNDFILE *new_file = sf_open(path, SFM_READ, &info);
+    // Check that the filename ends in .wav (case-insensitive).
+    const char *ext = strrchr(filename, '.');
+    if (!ext || strcasecmp(ext, ".wav") != 0)
+        return false;
 
-  if (!new_file) {
-    fprintf(stderr, "Cannot open %s: %s\n",
-	    path, sf_strerror(NULL));
-    return;
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/%s",
+             MUSIC_DIR, filename);
+
+    SF_INFO info = {0};
+    SNDFILE *new_file = sf_open(path, SFM_READ, &info);
+
+    if (!new_file) {
+        fprintf(stderr, "Cannot open WAV file %s: %s\n",
+                path, sf_strerror(NULL));
+        return false;
+    }
+
+    if (info.channels != 1 && info.channels != 2) {
+        fprintf(stderr, "Unsupported channel count: %d\n",
+                info.channels);
+        sf_close(new_file);
+        return false;
+    }
+
+    printf("Loaded: %s\n", path);
+    printf("Sample rate: %d Hz, channels: %d\n",
+           info.samplerate, info.channels);
+
+    // Replace the existing file only after validating the new one.
+    // Ensure the reader thread is not using the old file before
+    // closing it; thread synchronization is needed for track changes.
+    //    if (app.sndfile)
+    //        sf_close(app.sndfile);
+
+    app.sfinfo = info;
+    app.sndfile = new_file;
+
+    jack_ringbuffer_reset(app.ringbuffer);
+
+    atomic_store(&disk_eof, false);
+    atomic_store(&playing_ended, false);
+
+    app.playing = 1;
+
+    return true;
+}
+
+int inc_selection() {
+  
+  int oldselection = selection;
+  
+  selection++;
+  printf("down arrow pressed - incrementing selection to %d\n", selection);
+  if (selection >= entries) {
+    selection = entries - 1;
+  }
+  if (selection - offset >= lines) {
+    offset = selection - lines + 1;
+    if (offset < 0) offset = 0;
+    printf("selection - offset >= lines(%d), new offset = %d\n", lines, offset);
   }
 
-  if (info.channels != 1 && info.channels != 2) {
-    fprintf(stderr, "Unsupported channel count: %d\n",
-	    info.channels);
-    sf_close(new_file);
-    return;
-  }
+  return selection != oldselection;
+  
+}
 
-  printf("Loaded: %s\n", path);
-  printf("Sample rate: %d Hz, channels: %d\n",
-	 info.samplerate, info.channels);
+void handle_autoplay(void)
+{
+    if (AUTOPLAY &&
+        atomic_exchange(&playing_ended, false)) {
 
-  /*
-   * Note: this assumes the reader thread is not currently
-   * using the previous file. Synchronize file replacement
-   * before allowing track changes during playback.
-   */
-  //  if (app.sndfile)
-  //    sf_close(app.sndfile);
+        while (inc_selection()) {
+            if (play_selection()) {
+                break;
+            }
+        }
 
-  app.sfinfo = info;
-  app.sndfile = new_file;
-
-  jack_ringbuffer_reset(app.ringbuffer);
-  app.playing = 1;
+        update = 1;
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -311,6 +375,27 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "could not activate jack client\n");
     return 1;
   }
+
+  // Automatically connect to system playback ports
+  const char **playback_ports = jack_get_ports(
+					       app.client,
+					       NULL,
+					       JACK_DEFAULT_AUDIO_TYPE,
+					       JackPortIsPhysical | JackPortIsInput);
+
+  if (playback_ports) {
+    for (int i = 0; i < 2 && playback_ports[i] && app.ports[i]; i++) {
+      const char *src = jack_port_name(app.ports[i]);
+      const char *dst = playback_ports[i];
+
+      if (jack_connect(app.client, src, dst) == 0) {
+	printf("Connected %s -> %s\n", src, dst);
+      }
+    }
+    jack_free(playback_ports);
+  } else {
+    printf("No physical playback ports found.\n");
+  }  
 
   // disk reader thread
   pthread_t thread_id;
@@ -364,7 +449,6 @@ int main(int argc, char* argv[]) {
   
   int running = 1;
   SDL_Event event;
-  int update = 1;
 
   while (running) {
 
@@ -376,16 +460,7 @@ int main(int argc, char* argv[]) {
       } else if (event.type == SDL_KEYDOWN) {
 	switch (event.key.keysym.sym) {
 	case SDLK_DOWN:
-	  selection++;
-	  printf("down arrow pressed - incrementing selection to %d\n", selection);
-	  if (selection >= entries) {
-	    selection = entries - 1;
-	  }
-	  if (selection - offset >= lines) {
-	    offset = selection - lines + 1;
-	    if (offset < 0) offset = 0;
-	    printf("selection - offset >= lines(%d), new offset = %d\n", lines, offset);
-	  }
+	  inc_selection();
 	  update = 1;
 	  break;
 	case SDLK_UP:
@@ -406,6 +481,8 @@ int main(int argc, char* argv[]) {
 	}
       }
     }
+
+    handle_autoplay();
 
     if (update) {
 
